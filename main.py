@@ -23,7 +23,7 @@ audio_cache = {}
 active_downloads: Dict[int, Dict] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("הצטרף לקבוצה 🎵", url="https://t.me/+LceT_sT3WK0xZmM0")]]
+    keyboard = [[InlineKeyboardButton("הצטרף לקבוצה 📢", url="https://t.me/+LceT_sT3WK0xZmM0")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         'שלום! שלח לי שם של שיר ואחפש אותו ביוטיוב.',
@@ -36,7 +36,6 @@ async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     user_id = update.message.from_user.id
     
-    # שליחת הודעה ראשונית עם אימוג'י חיפוש
     search_message = await update.message.reply_text(
         "🔍 מחפש את השיר, אנא המתן...",
         reply_to_message_id=message_id
@@ -125,7 +124,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data_parts = query.data.split('_')
     
-    # בדיקה אם המשתמש הוא זה ששלח את החיפוש
     if data_parts[-1].isdigit():
         message_id = int(data_parts[-1])
         if message_id in message_searches and message_searches[message_id]['user_id'] != user_id:
@@ -226,68 +224,60 @@ async def download_and_send_song(query, bot, download_info):
                 del audio_cache[video_id]
         
         link = f"https://www.youtube.com/watch?v={video_id}"
-
-        process = await asyncio.create_subprocess_exec(
-            'yt-dlp',
-            '--cookies', COOKIES_FILE,
-            '--get-title',
-            '--get-duration',
-            link,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        download_info['process'] = process
-        stdout, stderr = await process.communicate()
         
-        if process.returncode != 0:
-            raise Exception(f"שגיאה בקבלת מידע: {stderr.decode()}")
+        # הגדרות yt-dlp להורדה ישירה של MP3
+        ydl_opts = {
+            'format': 'bestaudio/best',  # בחירת פורמט האודיו הטוב ביותר
+            'outtmpl': '%(title)s.%(ext)s',  # שם הקובץ לפי הכותרת
+            'cookies': COOKIES_FILE,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',  # איכות MP3
+            }],
+            'quiet': False,
+            'no_warnings': False,
+        }
 
-        song_info = stdout.decode().strip().split('\n')
-        song_title = song_info[0]
-        duration = song_info[1] if len(song_info) > 1 else "N/A"
-        
-        clean_title = song_title.replace('"', '')
-        download_info['filename'] = f"{clean_title}.mp3"
-
-        process = await asyncio.create_subprocess_exec(
-            'yt-dlp',
-            '--cookies', COOKIES_FILE,
-            '-x', '--audio-format', 'mp3',
-            '-o', download_info['filename'],
-            link
-        )
-        download_info['process'] = process
-        await process.communicate()
-        
-        if process.returncode != 0:
-            raise Exception("שגיאה בהורדת השיר")
-
-        if not os.path.exists(download_info['filename']):
-            raise Exception("הקובץ לא נוצר")
-
-        caption = f"🎵 שם: {clean_title}\n" \
-                 f"⏱ משך: {duration}\n\n" \
-                 f"Uploaded by @Music_Yt_RoBot"
-        
-        with open(download_info['filename'], 'rb') as audio_file:
-            cache_message = await bot.send_audio(
-                chat_id=AUDIO_CACHE_CHANNEL,
-                audio=audio_file,
-                caption=caption,
-                title=clean_title
+        with YoutubeDL(ydl_opts) as ydl:
+            # הורדה וחילוץ מידע
+            info = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: ydl.extract_info(link, download=True)
             )
             
-            audio_cache[video_id] = cache_message.message_id
+            song_title = info.get('title', 'Unknown Title')
+            duration = info.get('duration_string', 'N/A')
+            clean_title = song_title.replace('"', '')
+            filename = f"{clean_title}.mp3"
+            download_info['filename'] = filename
             
-            await bot.copy_message(
-                chat_id=query.message.chat_id,
-                from_chat_id=AUDIO_CACHE_CHANNEL,
-                message_id=cache_message.message_id,
-                reply_to_message_id=original_message_id
-            )
+            if not os.path.exists(filename):
+                raise Exception("הקובץ לא נוצר")
+
+            caption = f"🎵 שם: {clean_title}\n" \
+                     f"⏱ משך: {duration}\n\n" \
+                     f"Uploaded by @Music_Yt_RoBot"
+            
+            with open(filename, 'rb') as audio_file:
+                cache_message = await bot.send_audio(
+                    chat_id=AUDIO_CACHE_CHANNEL,
+                    audio=audio_file,
+                    caption=caption,
+                    title=clean_title
+                )
+                
+                audio_cache[video_id] = cache_message.message_id
+                
+                await bot.copy_message(
+                    chat_id=query.message.chat_id,
+                    from_chat_id=AUDIO_CACHE_CHANNEL,
+                    message_id=cache_message.message_id,
+                    reply_to_message_id=original_message_id
+                )
         
-        if os.path.exists(download_info['filename']):
-            os.remove(download_info['filename'])
+        if os.path.exists(filename):
+            os.remove(filename)
         await status_message.delete()
             
     except asyncio.CancelledError:
