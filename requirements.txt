@@ -5,4 +5,3 @@ uvicorn
 python-dotenv
 asyncio
 typing
-requests==2.32.3
