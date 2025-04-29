@@ -14,26 +14,33 @@ import threading
 # אל תמחק את הקרדיט הזה🥹
 # לבוט דוגמא חפש בטלגרם @Music_Yt_RoBot
 
-import os
 TOKEN = os.getenv('TOKEN')
-
 AUDIO_CACHE_CHANNEL = int(os.getenv('AUDIO_CACHE_CHANNEL'))
-
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
 
 message_searches = {}
-
 audio_cache = {}
-
 active_downloads: Dict[int, Dict] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('שלום! שלח לי שם של שיר ואחפש אותו ביוטיוב.\n\nלקבוצה שלי👇\nhttps://t.me/+LceT_sT3WK0xZmM0',
-                                  reply_to_message_id=update.message.message_id)
+    keyboard = [[InlineKeyboardButton("הצטרף לקבוצה 🎵", url="https://t.me/+LceT_sT3WK0xZmM0")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        'שלום! שלח לי שם של שיר ואחפש אותו ביוטיוב.',
+        reply_markup=reply_markup,
+        reply_to_message_id=update.message.message_id
+    )
 
 async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text
     message_id = update.message.message_id
+    user_id = update.message.from_user.id
+    
+    # שליחת הודעה ראשונית עם אימוג'י חיפוש
+    search_message = await update.message.reply_text(
+        "🔍 מחפש את השיר, אנא המתן...",
+        reply_to_message_id=message_id
+    )
     
     ydl_opts = {
         'quiet': False,
@@ -53,7 +60,6 @@ async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     try:
-        
         with YoutubeDL(ydl_opts) as ydl:
             results = await asyncio.get_event_loop().run_in_executor(
                 None, 
@@ -61,21 +67,20 @@ async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             
             if not results:
-                await update.message.reply_text("לא נמצאו תוצאות לחיפוש זה.",
-                                              reply_to_message_id=update.message.message_id)
+                await search_message.edit_text("לא נמצאו תוצאות לחיפוש זה.")
                 return
                 
             message_searches[message_id] = {
                 'results': results,
                 'page': 0,
                 'query': query,
-                'original_message_id': update.message.message_id
+                'original_message_id': message_id,
+                'user_id': user_id
             }
             
-            await show_results_page(update.message, message_id)
+            await show_results_page(search_message, message_id, edit=True)
     except Exception as e:
-        await update.message.reply_text(f"התרחשה שגיאה בחיפוש: {str(e)}",
-                                      reply_to_message_id=update.message.message_id)
+        await search_message.edit_text(f"התרחשה שגיאה בחיפוש: {str(e)}")
 
 async def show_results_page(message, message_id, edit=False):
     search_data = message_searches[message_id]
@@ -117,7 +122,15 @@ async def show_results_page(message, message_id, edit=False):
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     data_parts = query.data.split('_')
+    
+    # בדיקה אם המשתמש הוא זה ששלח את החיפוש
+    if data_parts[-1].isdigit():
+        message_id = int(data_parts[-1])
+        if message_id in message_searches and message_searches[message_id]['user_id'] != user_id:
+            await query.answer("אינך יכול להשתמש בכפתורים של חיפוש זה!", show_alert=True)
+            return
     
     if query.data.startswith("close"):
         message_id = int(data_parts[1])
@@ -139,7 +152,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("download"):
         video_id = data_parts[1]
         message_id = int(data_parts[2])
-        user_id = query.from_user.id
         
         if user_id in active_downloads:
             await query.answer("יש לך הורדה פעילה כרגע. אנא המתן לסיומה או בטל אותה.", show_alert=True)
@@ -166,16 +178,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif query.data.startswith("cancel"):
-        user_id = int(data_parts[1])
+        cancel_user_id = int(data_parts[1])
         video_id = data_parts[2]
         
-        if query.from_user.id != user_id:
+        if query.from_user.id != cancel_user_id:
             await query.answer("אתה לא יכול לבטל הורדה של משתמש אחר", show_alert=True)
             return
             
-        if user_id in active_downloads:
-            
-            download_info = active_downloads[user_id]
+        if cancel_user_id in active_downloads:
+            download_info = active_downloads[cancel_user_id]
             if download_info['process']:
                 try:
                     os.kill(download_info['process'].pid, signal.SIGTERM)
@@ -189,7 +200,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             
             await download_info['status_message'].edit_text("ההורדה בוטלה.")
-            del active_downloads[user_id]
+            del active_downloads[cancel_user_id]
     
     await query.answer()
 
@@ -200,7 +211,6 @@ async def download_and_send_song(query, bot, download_info):
     original_message_id = download_info['original_message_id']
     
     try:
-        
         if video_id in audio_cache:
             cached_message_id = audio_cache[video_id]
             try:
@@ -255,7 +265,6 @@ async def download_and_send_song(query, bot, download_info):
         if not os.path.exists(download_info['filename']):
             raise Exception("הקובץ לא נוצר")
 
-        
         caption = f"🎵 שם: {clean_title}\n" \
                  f"⏱ משך: {duration}\n\n" \
                  f"Uploaded by @Music_Yt_RoBot"
@@ -277,7 +286,6 @@ async def download_and_send_song(query, bot, download_info):
                 reply_to_message_id=original_message_id
             )
         
-        # ניקוי
         if os.path.exists(download_info['filename']):
             os.remove(download_info['filename'])
         await status_message.delete()
@@ -304,7 +312,6 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 def main():
-    
     web_thread = threading.Thread(target=run_web_server)
     web_thread.daemon = True
     web_thread.start()
