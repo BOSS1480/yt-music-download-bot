@@ -1,7 +1,6 @@
 import os
 import subprocess
 import asyncio
-import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from yt_dlp import YoutubeDL
@@ -10,7 +9,6 @@ import signal
 import uvicorn
 from web_server import app
 import threading
-import requests
 
 # נוצר ע"י @the_joker121 בטלגרם. לערוץ https://t.me/bot_sratim_sdarot
 # אל תמחק את הקרדיט הזה🥹
@@ -38,8 +36,9 @@ async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     user_id = update.message.from_user.id
     
+    # שליחת הודעה ראשונית עם אימוג'י חיפוש
     search_message = await update.message.reply_text(
-        "🔍 מחפש את השיר, אנא המתן...",
+        "🔍",
         reply_to_message_id=message_id
     )
     
@@ -48,7 +47,7 @@ async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'no_warnings': False,
         'extract_flat': True,
         'default_search': 'ytsearch50',
-        'cookies': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
+        'cookies': COOKIES_FILE,
         'verbose': True,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -126,6 +125,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data_parts = query.data.split('_')
     
+    # בדיקה אם המשתמש הוא זה ששלח את החיפוש
     if data_parts[-1].isdigit():
         message_id = int(data_parts[-1])
         if message_id in message_searches and message_searches[message_id]['user_id'] != user_id:
@@ -159,7 +159,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         keyboard = [[InlineKeyboardButton("❌ ביטול הורדה", callback_data=f"cancel_{user_id}_{video_id}")]]
         await query.message.edit_text(
-            "מוריד את השיר, אנא המתן...\nהורדה: 0%\nהעלאה: 0%",
+            "מוריד את השיר, אנא המתן...",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
@@ -169,10 +169,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'original_message_id': message_searches[message_id]['original_message_id'],
             'query_message': query.message,
             'process': None,
-            'filename': None,
-            'download_progress': 0,
-            'upload_progress': 0,
-            'last_update': 0
+            'filename': None
         }
         active_downloads[user_id] = download_info
         
@@ -207,26 +204,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
 
-async def update_progress(download_info):
-    while download_info['download_progress'] < 100 or download_info['upload_progress'] < 100:
-        current_time = time.time()
-        if current_time - download_info['last_update'] >= 3:
-            try:
-                await download_info['status_message'].edit_text(
-                    f"מוריד את השיר, אנא המתן...\nהורדה: {download_info['download_progress']}%\nהעלאה: {download_info['upload_progress']}%",
-                    reply_markup=download_info['status_message'].reply_markup
-                )
-                download_info['last_update'] = current_time
-            except:
-                break
-        await asyncio.sleep(0.5)
-
-def progress_hook(d, download_info):
-    if d['status'] == 'downloading':
-        if 'total_bytes' in d and 'downloaded_bytes' in d:
-            progress = (d['downloaded_bytes'] / d['total_bytes']) * 100
-            download_info['download_progress'] = min(round(progress), 100)
-
 async def download_and_send_song(query, bot, download_info):
     user_id = query.from_user.id
     video_id = download_info['video_id']
@@ -249,99 +226,77 @@ async def download_and_send_song(query, bot, download_info):
                 del audio_cache[video_id]
         
         link = f"https://www.youtube.com/watch?v={video_id}"
-        
-        # הגדרות yt-dlp להורדה ישירה של MP3
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': '%(title)s.%(ext)s',
-            'cookies': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': False,
-            'no_warnings': False,
-            'progress_hooks': [lambda d: progress_hook(d, download_info)],
-        }
 
-        with YoutubeDL(ydl_opts) as ydl:
-            download_info['last_update'] = time.time()
-            asyncio.create_task(update_progress(download_info))
-            
-            info = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: ydl.extract_info(link, download=True)
+        process = await asyncio.create_subprocess_exec(
+            'yt-dlp',
+            '--cookies', COOKIES_FILE,
+            '--get-title',
+            '--get-duration',
+            link,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        download_info['process'] = process
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            raise Exception(f"שגיאה בקבלת מידע: {stderr.decode()}")
+
+        song_info = stdout.decode().strip().split('\n')
+        song_title = song_info[0]
+        duration = song_info[1] if len(song_info) > 1 else "N/A"
+        
+        clean_title = song_title.replace('"', '')
+        download_info['filename'] = f"{clean_title}.mp3"
+
+        process = await asyncio.create_subprocess_exec(
+            'yt-dlp',
+            '--cookies', COOKIES_FILE,
+            '-x', '--audio-format', 'mp3',
+            '-o', download_info['filename'],
+            link
+        )
+        download_info['process'] = process
+        await process.communicate()
+        
+        if process.returncode != 0:
+            raise Exception("שגיאה בהורדת השיר")
+
+        if not os.path.exists(download_info['filename']):
+            raise Exception("הקובץ לא נוצר")
+
+        caption = f"🎵 שם: {clean_title}\n" \
+                 f"⏱ משך: {duration}\n\n" \
+                 f"Uploaded by @Music_Yt_RoBot"
+        
+        with open(download_info['filename'], 'rb') as audio_file:
+            cache_message = await bot.send_audio(
+                chat_id=AUDIO_CACHE_CHANNEL,
+                audio=audio_file,
+                caption=caption,
+                title=clean_title
             )
             
-            song_title = info.get('title', 'Unknown Title')
-            duration = info.get('duration_string', 'N/A')
-            thumbnail_url = info.get('thumbnail', None)
-            clean_title = song_title.replace('"', '')
-            filename = f"{clean_title}.mp3"
-            download_info['filename'] = filename
-            download_info['download_progress'] = 100
+            audio_cache[video_id] = cache_message.message_id
             
-            if not os.path.exists(filename):
-                raise Exception("הקובץ לא נוצר")
-
-            caption = f"🎵 שם: {clean_title}\n" \
-                     f"⏱ משך: {duration}\n\n" \
-                     f"Uploaded by @Music_Yt_RoBot"
+            await bot.copy_message(
+                chat_id=query.message.chat_id,
+                from_chat_id=AUDIO_CACHE_CHANNEL,
+                message_id=cache_message.message_id,
+                reply_to_message_id=original_message_id
+            )
+        
+        if os.path.exists(download_info['filename']):
+            os.remove(download_info['filename'])
+        await status_message.delete()
             
-            # הורדת התמונה הממוזערת
-            thumbnail_file = None
-            if thumbnail_url:
-                try:
-                    response = requests.get(thumbnail_url)
-                    if response.status_code == 200:
-                        thumbnail_file = f"{clean_title}_thumb.jpg"
-                        with open(thumbnail_file, 'wb') as f:
-                            f.write(response.content)
-                except:
-                    thumbnail_file = None
-            
-            with open(filename, 'rb') as audio_file:
-                # חישוב התקדמות ההעלאה
-                file_size = os.path.getsize(filename)
-                chunk_size = 1024 * 1024  # 1MB
-                sent_bytes = 0
-                
-                async def send_with_progress():
-                    nonlocal sent_bytes
-                    cache_message = await bot.send_audio(
-                        chat_id=AUDIO_CACHE_CHANNEL,
-                        audio=audio_file,
-                        caption=caption,
-                        title=clean_title,
-                        thumbnail=open(thumbnail_file, 'rb') if thumbnail_file else None
-                    )
-                    download_info['upload_progress'] = 100
-                    return cache_message
-                
-                cache_message = await send_with_progress()
-                
-                audio_cache[video_id] = cache_message.message_id
-                
-                await bot.copy_message(
-                    chat_id=query.message.chat_id,
-                    from_chat_id=AUDIO_CACHE_CHANNEL,
-                    message_id=cache_message.message_id,
-                    reply_to_message_id=original_message_id
-                )
-            
-            # ניקוי קבצים
-            if os.path.exists(filename):
-                os.remove(filename)
-            if thumbnail_file and os.path.exists(thumbnail_file):
-                os.remove(thumbnail_file)
-            await status_message.delete()
+    except asyncio.CancelledError:
+        await status_message.edit_text("ההורדה בוטלה.")
+        if download_info['filename'] and os.path.exists(download_info['filename']):
+            os.remove(download_info['filename'])
             
     except Exception as e:
-        error_message = str(e)
-        if "Sign in to confirm you’re not a bot" in error_message:
-            error_message = "שגיאת קוקיז: אנא ודא שקובץ הקוקיז תקין. ראה https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
-        await status_message.edit_text(f"התרחשה שגיאה בהורדת השיר: {error_message}")
+        await status_message.edit_text(f"התרחשה שגיאה בהורדת השיר: {str(e)}")
         
     finally:
         if user_id in active_downloads:
