@@ -1,15 +1,14 @@
 import os
 import json
-import subprocess
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, ContextTypes
 from yt_dlp import YoutubeDL
 from typing import Dict
 import signal
 import uvicorn
 import requests
-from web_server import app
+from fastapi import FastAPI
 import threading
 
 # הגדרות
@@ -250,8 +249,8 @@ async def download_and_send_song(query, bot, download_info):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'writethumbnail': True,  # הורדת התמונה הממוזערת
-            'embedthumbnail': True,  # הטמעת התמונה בקובץ
+            'writethumbnail': True,
+            'embedthumbnail': True,
             'quiet': False,
             'no_warnings': False,
         }
@@ -267,7 +266,7 @@ async def download_and_send_song(query, bot, download_info):
             duration = info.get('duration_string', 'N/A')
             clean_title = song_title.replace('"', '')
             filename = f"{clean_title}.mp3"
-            thumbnail = f"{clean_title}.jpg"  # התמונה הממוזערת שנשמרת
+            thumbnail = f"{clean_title}.jpg"
 
         if not os.path.exists(filename):
             raise Exception("הקובץ לא נוצר")
@@ -288,7 +287,7 @@ async def download_and_send_song(query, bot, download_info):
             )
             
             audio_cache[video_id] = cache_message.message_id
-            save_audio_cache()  # שמירת הקאש
+            save_audio_cache()
             
             await bot.copy_message(
                 chat_id=query.message.chat_id,
@@ -321,8 +320,11 @@ async def download_and_send_song(query, bot, download_info):
             except:
                 pass
 
+# עדכון ה-web server
+app = FastAPI()
+
 def run_web_server():
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
 
 def main():
     web_thread = threading.Thread(target=run_web_server)
@@ -332,11 +334,11 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_song))
+    application.add_handler(MessageHandler(Filters.text & ~Filters.command, search_song))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     print("הבוט התחיל לפעול...")
-    application.run_polling()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
