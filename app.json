@@ -1,0 +1,30 @@
+{
+  "name": "My Music Bot",
+  "description": "A Telegram bot for downloading music from YouTube",
+  "repository": "https://github.com/your-username/your-repo",
+  "stack": "heroku-24",
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "env": {
+    "TOKEN": {
+      "description": "Telegram Bot Token",
+      "required": true
+    },
+    "AUDIO_CACHE_CHANNEL": {
+      "description": "Telegram Channel ID for caching audio",
+      "required": true
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git"
+    },
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
