@@ -10,7 +10,7 @@ import uvicorn
 from web_server import app
 import threading
 
-# נוצר ע"י @the_joker121 בטלגרם. לערוץ https://t.me/bot_sratim_sdarot
+# נוצר ע"י @the_joker121 בטלגרם. לערוץ https://t.me/The_Joker_Bots
 # אל תמחק את הקרדיט הזה🥹
 # לבוט דוגמא חפש בטלגרם @Music_Yt_RoBot
 
@@ -328,6 +328,6 @@ def main():
 if __name__ == '__main__':
     main()
 
-# נוצר ע"י @the_joker121 בטלגרם. לערוץ https://t.me/bot_sratim_sdarot
+# נוצר ע"י @the_joker121 בטלגרם. לערוץ https://t.me/The_Joker_Bots
 # אל תמחק את הקרדיט הזה🥹
 # לבוט דוגמא חפש בטלגרם @Music_Yt_RoBot
